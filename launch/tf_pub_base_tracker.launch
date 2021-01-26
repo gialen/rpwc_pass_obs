@@ -1,0 +1,9 @@
+ 
+<launch>
+  	<arg name="yamlFile" default="$(find passive_obs)/config/cam2basetracker.yaml"/>
+  	<rosparam command="load" file="$(arg yamlFile)"/>
+  	
+		<node pkg="passive_obs" name="tf_base_tracker_pub" type="tf_base_tracker_pub_node" output="screen"/>
+    
+
+</launch>
