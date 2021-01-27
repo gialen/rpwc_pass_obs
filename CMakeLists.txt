@@ -213,3 +213,7 @@ target_link_libraries(cam_track_calib_node ${catkin_LIBRARIES})
 add_executable(tf_base_tracker_pub_node src/tf_base_tracker_pub.cpp)
 add_dependencies(tf_base_tracker_pub_node ${${PROJECT_NAME}_EXPORTED_TARGETS} ${catkin_EXPORTED_TARGETS})
 target_link_libraries(tf_base_tracker_pub_node ${catkin_LIBRARIES})
+
+add_executable(magic_pen_node src/main_magic_pen.cpp)
+add_dependencies(magic_pen_node ${${PROJECT_NAME}_EXPORTED_TARGETS} ${catkin_EXPORTED_TARGETS})
+target_link_libraries(magic_pen_node ${catkin_LIBRARIES})
