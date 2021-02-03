@@ -1,0 +1,10 @@
+<launch>
+
+	<node pkg="rpwc_pass_obs" name="magic_pen_node" type="magic_pen_node" output="screen"/>
+
+	<node pkg="tf" type="static_transform_publisher" name="calibrator" args="0.0944 -0.0944 0.009 -0.2706 0.6533 -0.6533 0.2706 /panda_link8 /calib 100" />
+
+
+</launch>
+
+
