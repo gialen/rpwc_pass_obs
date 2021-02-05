@@ -16,15 +16,16 @@
 #include <franka_msgs/FrankaState.h>
 
 geometry_msgs::Pose pose_tracker_;
-Eigen::Matrix4d tracker_offset_inv_, T_0to7_calib_, T_0toResult_, T_0to7_, T_point_;
+Eigen::Matrix4d tracker_offset_inv_, T_0to8_calib_, T_0tolink8Result_, T_0to8_, T_point_;
 bool flag_calibration = false;
 std::vector<geometry_msgs::Pose>  vec_point_;
 std::vector<geometry_msgs::PoseArray>  vec_traj_;
+geometry_msgs::PoseArray pose_array_tmp_;
 std::vector<int>  vec_task_type_;
 int state_ = 0;
-int count_traj_ = 0;
 int count_play_task_ = 0;
 int count_play_point_ = 0;
+int count_play_traj_ = 0;
 
 
 void callback_tracker(const geometry_msgs::PoseWithCovarianceStamped::ConstPtr& msg)
@@ -70,8 +71,7 @@ bool callback_play_task(std_srvs::Empty::Request  &req, std_srvs::Empty::Respons
 Eigen::Matrix4d pose_interp(double t, double t1, double t2, Eigen::Matrix4d const& M1, Eigen::Matrix4d const& M2) {
   // assume here t1 <= t <= t2
   double alpha = 0.0;
-  if (t2 != t1)
-    alpha = (t - t1) / (t2 - t1);
+  if (t2 != t1) alpha = (t - t1) / (t2 - t1);
 
   Eigen::Quaterniond rot1(M1.block<3,3>(0,0));
   Eigen::Quaterniond rot2(M2.block<3,3>(0,0));
@@ -111,27 +111,33 @@ int main(int argc, char **argv)
   ros::ServiceServer server_clear_task = nh.advertiseService("/clear_task", &callback_clear_task);
   ros::ServiceServer server_play_task = nh.advertiseService("/play_task", &callback_play_task);
 
-  T_0toResult_ = Eigen::Matrix4d::Identity();
+  T_0tolink8Result_ = Eigen::Matrix4d::Identity();
   T_point_ = Eigen::Matrix4d::Identity();
-  Eigen::Matrix4d T_7toCalib(Eigen::Matrix4d::Identity());
-  Eigen::Matrix4d T_7toCalib_inv(Eigen::Matrix4d::Identity());
-  T_7toCalib.block<3,3>(0,0) << -0.707107, 0.0, 0.707107,
+  Eigen::Matrix4d T_8toCalib(Eigen::Matrix4d::Identity());
+  Eigen::Matrix4d T_8toCalib_inv(Eigen::Matrix4d::Identity());
+  T_8toCalib.block<3,3>(0,0) << -0.707107, 0.0, 0.707107,
                                 -0.707107, 0.0, -0.707107,
                                  0.0, -1.0, 0.0;
-  T_7toCalib.block<3,1>(0,3) << 0.0944, -0.0944, 0.009;
+  T_8toCalib.block<3,1>(0,3) << 0.0944, -0.0944, 0.009;
 
-  Eigen::Matrix4d T_offsetResult(Eigen::Matrix4d::Identity());
-  T_offsetResult.block<3,3>(0,0) <<   -1.0000000,  0.0000000,  0.0000000,
+  Eigen::Matrix4d T_tracker2tool(Eigen::Matrix4d::Identity());
+  T_tracker2tool.block<3,3>(0,0) <<   -1.0000000,  0.0000000,  0.0000000,
                                        0.0000000,  1.0000000,  0.0000000,
                                       -0.0000000,  0.0000000, -1.0000000;
+  T_tracker2tool.block<3,1>(0,3) << 0.0,0.0,-0.10;
 
-  Eigen::Matrix3d r_tmp(T_7toCalib.block<3,3>(0,0));
-  T_7toCalib_inv.block<3,3>(0,0) = r_tmp.transpose();
-  T_7toCalib_inv.block<3,1>(0,3) = -r_tmp.transpose() * T_7toCalib.block<3,1>(0,3);
-  T_7toCalib_inv.block<1,3>(3,0) = Eigen::Vector3d::Zero();
-  T_7toCalib_inv(3,3) = 1.0;
+  Eigen::Matrix4d T_tool2link7(Eigen::Matrix4d::Identity());
+  T_tool2link7.block<3,1>(0,3) << 0.0,0.0,-0.13;
+
+  Eigen::Matrix3d r_tmp(T_8toCalib.block<3,3>(0,0));
+  T_8toCalib_inv.block<3,3>(0,0) = r_tmp.transpose();
+  T_8toCalib_inv.block<3,1>(0,3) = -r_tmp.transpose() * T_8toCalib.block<3,1>(0,3);
+  T_8toCalib_inv.block<1,3>(3,0) = Eigen::Vector3d::Zero();
+  T_8toCalib_inv(3,3) = 1.0;
 
   tf::TransformBroadcaster tf_broadcaster;
+  tf::TransformBroadcaster br_base_2_des;
+
 	
 	while(ros::ok())
 	{
@@ -147,24 +153,32 @@ int main(int argc, char **argv)
 	      Eigen::Matrix3d R_tmp(q_tmp);
 	      tracker_run.block<3,3>(0,0) = R_tmp;
 
-	      Eigen::Matrix4d T_Calib_to_Run = tracker_offset_inv_ * tracker_run;
+	      Eigen::Matrix4d T_Calib_to_tracker = tracker_offset_inv_ * tracker_run;
 
-	      // T_0toResult_ = T_0to7_calib_ * T_7toCalib * T_Calib_to_Run * T_7toCalib_inv;
-	      T_0toResult_ = T_0to7_calib_ * T_7toCalib * T_Calib_to_Run * T_offsetResult;
+	      // T_0tolink8Result_ = T_0to8_calib_ * T_8toCalib * T_Calib_to_tracker * T_8toCalib_inv;
+        Eigen::Matrix4d T_02toolResult_ = T_0to8_calib_ * T_8toCalib * T_Calib_to_tracker * T_tracker2tool;
+	      T_0tolink8Result_ = T_02toolResult_ * T_tool2link7;
 
-	      q_tmp = T_Calib_to_Run.block<3,3>(0,0);
+	      q_tmp = T_Calib_to_tracker.block<3,3>(0,0);
 	      tf::Transform transform;
 	      tf::Quaternion q(q_tmp.x(),q_tmp.y(), q_tmp.z(), q_tmp.w());
 	      transform.setRotation(q);
-	      transform.setOrigin( tf::Vector3(T_Calib_to_Run(0,3), T_Calib_to_Run(1,3), T_Calib_to_Run(2,3)));
+	      transform.setOrigin( tf::Vector3(T_Calib_to_tracker(0,3), T_Calib_to_tracker(1,3), T_Calib_to_tracker(2,3)));
 	      tf_broadcaster.sendTransform(tf::StampedTransform(transform, ros::Time::now(), "/calib", "/tracker"));
 
-	      q_tmp = T_0toResult_.block<3,3>(0,0);
+	      q_tmp = T_02toolResult_.block<3,3>(0,0);
 	      tf::Transform transform1;
 	      tf::Quaternion q1(q_tmp.x(),q_tmp.y(), q_tmp.z(), q_tmp.w());
 	      transform1.setRotation(q1);
-	      transform1.setOrigin( tf::Vector3(T_0toResult_(0,3), T_0toResult_(1,3), T_0toResult_(2,3)));
-	      tf_broadcaster.sendTransform(tf::StampedTransform(transform1, ros::Time::now(), "/panda_link0", "/result"));
+	      transform1.setOrigin( tf::Vector3(T_02toolResult_(0,3), T_02toolResult_(1,3), T_02toolResult_(2,3)));
+	      tf_broadcaster.sendTransform(tf::StampedTransform(transform1, ros::Time::now(), "/panda_link0", "/toolResult"));
+
+        q_tmp = T_0tolink8Result_.block<3,3>(0,0);
+        tf::Transform transform2;
+        tf::Quaternion q2(q_tmp.x(),q_tmp.y(), q_tmp.z(), q_tmp.w());
+        transform2.setRotation(q2);
+        transform2.setOrigin( tf::Vector3(T_0tolink8Result_(0,3), T_0tolink8Result_(1,3), T_0tolink8Result_(2,3)));
+        tf_broadcaster.sendTransform(tf::StampedTransform(transform2, ros::Time::now(), "/panda_link0", "/link8Result"));
 
 	    }
 
@@ -200,13 +214,13 @@ int main(int argc, char **argv)
 	        {
 	          try{
 	              tf_listener_.lookupTransform("/panda_link0", "/panda_link8", ros::Time(0), transform_tmp);
-	              T_0to7_calib_ = Eigen::Matrix4d::Identity();
-	              T_0to7_calib_.block<3,1>(0,3) << transform_tmp.getOrigin().x(), transform_tmp.getOrigin().y(), transform_tmp.getOrigin().z();
+	              T_0to8_calib_ = Eigen::Matrix4d::Identity();
+	              T_0to8_calib_.block<3,1>(0,3) << transform_tmp.getOrigin().x(), transform_tmp.getOrigin().y(), transform_tmp.getOrigin().z();
 	              Eigen::Quaterniond q_tmp;
 	              q_tmp.w() = transform_tmp.getRotation().w();
 	              q_tmp.vec() << transform_tmp.getRotation().x(), transform_tmp.getRotation().y(), transform_tmp.getRotation().z();
 	              Eigen::Matrix3d R_tmp(q_tmp);
-	              T_0to7_calib_.block<3,3>(0,0) = R_tmp;
+	              T_0to8_calib_.block<3,3>(0,0) = R_tmp;
 	              // std::cout << transform_tmp.getOrigin().x() << " " << transform_tmp.getOrigin().y() << " " << transform_tmp.getOrigin().z() << std::endl;
 	              tf_flag = false;
 	              flag_calibration = true;
@@ -223,10 +237,10 @@ int main(int argc, char **argv)
 	      case 2: //save point
 	      {
 	        geometry_msgs::Pose pose_tmp;
-	        pose_tmp.position.x = T_0toResult_(0,3);
-	        pose_tmp.position.y = T_0toResult_(1,3);
-	        pose_tmp.position.z = T_0toResult_(2,3);
-	        Eigen::Quaterniond q_tmp(T_0toResult_.block<3,3>(0,0));
+	        pose_tmp.position.x = T_0tolink8Result_(0,3);
+	        pose_tmp.position.y = T_0tolink8Result_(1,3);
+	        pose_tmp.position.z = T_0tolink8Result_(2,3);
+	        Eigen::Quaterniond q_tmp(T_0tolink8Result_.block<3,3>(0,0));
 	        pose_tmp.orientation.w = q_tmp.w();
 	        pose_tmp.orientation.x = q_tmp.x();
 	        pose_tmp.orientation.y = q_tmp.y();
@@ -240,22 +254,23 @@ int main(int argc, char **argv)
 	      case 3: // start traj
 	      {
 	        geometry_msgs::Pose pose_tmp;
-	        pose_tmp.position.x = T_0toResult_(0,3);
-	        pose_tmp.position.y = T_0toResult_(1,3);
-	        pose_tmp.position.z = T_0toResult_(2,3);
-	        Eigen::Quaterniond q_tmp(T_0toResult_.block<3,3>(0,0));
+	        pose_tmp.position.x = T_0tolink8Result_(0,3);
+	        pose_tmp.position.y = T_0tolink8Result_(1,3);
+	        pose_tmp.position.z = T_0tolink8Result_(2,3);
+	        Eigen::Quaterniond q_tmp(T_0tolink8Result_.block<3,3>(0,0));
 	        pose_tmp.orientation.w = q_tmp.w();
 	        pose_tmp.orientation.x = q_tmp.x();
 	        pose_tmp.orientation.y = q_tmp.y();
 	        pose_tmp.orientation.z = q_tmp.z();
-	        vec_traj_[count_traj_].poses.push_back(pose_tmp);
+          pose_array_tmp_.poses.push_back(pose_tmp);
 	        break;
 	      }
 
 	      case 4: // end traj
 	      {
+          vec_traj_.push_back(pose_array_tmp_);
+          pose_array_tmp_.poses.clear();
 	        vec_task_type_.push_back(1);
-	        count_traj_++;
 	        state_ = 0;
 	        break;
 	      }
@@ -264,7 +279,7 @@ int main(int argc, char **argv)
 	      {
 	      	vec_task_type_.clear();
 	        vec_traj_.clear();
-	        count_traj_= 0;
+          pose_array_tmp_.poses.clear();
 	        state_ = 0;
 	        break;
 	      }
@@ -291,59 +306,101 @@ int main(int argc, char **argv)
 				        {
 				          try{
 				              tf_listener_.lookupTransform("/panda_link0", "/panda_link8", ros::Time(0), transform_tmp);
-				              T_0to7_ = Eigen::Matrix4d::Identity();
-				              T_0to7_.block<3,1>(0,3) << transform_tmp.getOrigin().x(), transform_tmp.getOrigin().y(), transform_tmp.getOrigin().z();
+				              T_0to8_ = Eigen::Matrix4d::Identity();
+				              T_0to8_.block<3,1>(0,3) << transform_tmp.getOrigin().x(), transform_tmp.getOrigin().y(), transform_tmp.getOrigin().z();
 				              Eigen::Quaterniond q_tmp;
 				              q_tmp.w() = transform_tmp.getRotation().w();
 				              q_tmp.vec() << transform_tmp.getRotation().x(), transform_tmp.getRotation().y(), transform_tmp.getRotation().z();
 				              Eigen::Matrix3d R_tmp(q_tmp);
-				              T_0to7_.block<3,3>(0,0) = R_tmp;
+				              T_0to8_.block<3,3>(0,0) = R_tmp;
 				              // std::cout << transform_tmp.getOrigin().x() << " " << transform_tmp.getOrigin().y() << " " << transform_tmp.getOrigin().z() << std::endl;
 				              tf_flag = false;
-				          }
-				          catch (tf::TransformException ex){
-				              ROS_ERROR("%s",ex.what());
-				              ros::Duration(1.0).sleep();
-				          }
+  				          }
+  				          catch (tf::TransformException ex){
+  				              ROS_ERROR("%s",ex.what());
+  				              ros::Duration(1.0).sleep();
+  				          }
 				        }
 				        fist_time = false;
 		      		}
 		      		else
 		      		{
 		      			if(step_play <= (time_to_point/dt))
-						{
-							double t = dt * step_play;
-							Eigen::Matrix4d result = pose_interp(t, 0.0, time_to_point, T_0to7_, T_point_);
-							step_play++;
-							// publish pose des result
-						}
-						else
-						{
-							step_play = 0;
-							count_play_task_++;
-							fist_time = true;
-						}
+    						{
+    							double t = dt * step_play;
+    							Eigen::Matrix4d result = pose_interp(t, 0.0, time_to_point, T_0to8_, T_point_);
+    							step_play++;
+    							// publish pose des result
+                  geometry_msgs::Pose des_pose;
+                  des_pose.position.x = result(0,3);
+                  des_pose.position.y = result(1,3);
+                  des_pose.position.z = result(2,3);
+                  Eigen::Quaterniond q_tmp(result.block<3,3>(0,0));
+                  des_pose.orientation.w = q_tmp.w();
+                  des_pose.orientation.x = q_tmp.x();
+                  des_pose.orientation.y = q_tmp.y();
+                  des_pose.orientation.z = q_tmp.z();
+                  tf::Transform transform;
+                  tf::Quaternion q(des_pose.orientation.x,des_pose.orientation.y, des_pose.orientation.z, des_pose.orientation.w);
+                  transform.setRotation(q);
+                  transform.setOrigin( tf::Vector3(des_pose.position.x, des_pose.position.y, des_pose.position.z));
+                  br_base_2_des.sendTransform(tf::StampedTransform(transform, ros::Time::now(), "/panda_link0", "/des_pose_link8"));
+    						}
+    						else
+    						{
+    							step_play = 0;
+    							count_play_task_++;
+                  count_play_point_++;
+    							fist_time = true;
+    						}
 
 		      		}
-		      		
-
 		      	}
 		      	else if(vec_task_type_[count_play_task_] == 1)
 		      	{
-
+              if(vec_traj_[count_play_traj_].poses.size() > step_play)
+              {
+                geometry_msgs::Pose pose_tmp = vec_traj_[count_play_traj_].poses[step_play];
+                Eigen::Matrix4d result(Eigen::Matrix4d::Identity());
+                result.block<3,1>(0,3) << pose_tmp.position.x, pose_tmp.position.y, pose_tmp.position.z;
+                Eigen::Quaterniond q_tmp1;
+                q_tmp1.w() = pose_tmp.orientation.w;
+                q_tmp1.vec() << pose_tmp.orientation.x, pose_tmp.orientation.y, pose_tmp.orientation.z;
+                Eigen::Matrix3d R_tmp(q_tmp1);
+                result.block<3,3>(0,0) = R_tmp;
+                step_play++;
+                // publish pose des result
+                geometry_msgs::Pose des_pose;
+                des_pose.position.x = result(0,3);
+                des_pose.position.y = result(1,3);
+                des_pose.position.z = result(2,3);
+                Eigen::Quaterniond q_tmp(result.block<3,3>(0,0));
+                des_pose.orientation.w = q_tmp.w();
+                des_pose.orientation.x = q_tmp.x();
+                des_pose.orientation.y = q_tmp.y();
+                des_pose.orientation.z = q_tmp.z();
+                tf::Transform transform;
+                tf::Quaternion q(des_pose.orientation.x,des_pose.orientation.y, des_pose.orientation.z, des_pose.orientation.w);
+                transform.setRotation(q);
+                transform.setOrigin( tf::Vector3(des_pose.position.x, des_pose.position.y, des_pose.position.z));
+                br_base_2_des.sendTransform(tf::StampedTransform(transform, ros::Time::now(), "/panda_link0", "/des_pose_link8"));
+              }
+              else
+              {
+                step_play = 0;
+                count_play_task_++;
+                count_play_traj_++;
+              }              
 		      	}
 	      	}
 	      	else
 	      	{
 	      		// go home
+            count_play_task_ = 0;
+            count_play_point_ = 0;
+            count_play_traj_ = 0;
+            state_ = 0;
 	      	}
-	      	
-
-	      	// play();
-	        // vec_task_type_.clear();
-	        // vec_traj_.clear();
-	        // count_traj_= 0;
-	        // state_ = 0;
 	        break;
 	      }
 	    }
