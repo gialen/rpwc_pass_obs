@@ -80,7 +80,8 @@ Eigen::Matrix4d pose_interp(double t, double t1, double t2, Eigen::Matrix4d cons
   Eigen::Vector3d trans2 = M2.block<3,1>(0,3);
 
   Eigen::Matrix4d result;
-  result.block<3,1>(0,3) = (1.0 - alpha) * trans1 + alpha * trans2;
+  // result.block<3,1>(0,3) = (1.0 - alpha) * trans1 + alpha * trans2;
+  result.block<3,1>(0,3) = trans1 + (((trans2 - trans1) / (t2 - t1)) * t);
   result.block<3,3>(0,0) = rot1.slerp(alpha, rot2).toRotationMatrix();
 
   return result;
@@ -103,6 +104,8 @@ int main(int argc, char **argv)
 	// //Subscriber
 	ros::Subscriber sub_tracker_pose = nh.subscribe("/vive/LHR_042ED232_pose", 1, &callback_tracker);
  //  // ros::Subscriber sub_curr_pos_ = nh.subscribe("/franka_state_controller/franka_states", 1, &franka_bridge::callback_curr_pose, this);
+  ros::Publisher pub_pos_des = nh.advertise<geometry_msgs::PoseStamped>("/joint_position_one_task_inv_kin/pose_des", 1);
+
  //  //Service Server
   ros::ServiceServer server_calibration = nh.advertiseService("/calibrate", &callback_calibration);
   ros::ServiceServer server_save_point = nh.advertiseService("/save_point", &callback_save_point);
@@ -124,10 +127,10 @@ int main(int argc, char **argv)
   T_tracker2tool.block<3,3>(0,0) <<   -1.0000000,  0.0000000,  0.0000000,
                                        0.0000000,  1.0000000,  0.0000000,
                                       -0.0000000,  0.0000000, -1.0000000;
-  T_tracker2tool.block<3,1>(0,3) << 0.0,0.0,-0.10;
+  T_tracker2tool.block<3,1>(0,3) << 0.0,0.0,-0.123;
 
   Eigen::Matrix4d T_tool2link7(Eigen::Matrix4d::Identity());
-  T_tool2link7.block<3,1>(0,3) << 0.0,0.0,-0.13;
+  T_tool2link7.block<3,1>(0,3) << 0.0,0.0,-0.138;
 
   Eigen::Matrix3d r_tmp(T_8toCalib.block<3,3>(0,0));
   T_8toCalib_inv.block<3,3>(0,0) = r_tmp.transpose();
@@ -156,15 +159,16 @@ int main(int argc, char **argv)
 	      Eigen::Matrix4d T_Calib_to_tracker = tracker_offset_inv_ * tracker_run;
 
 	      // T_0tolink8Result_ = T_0to8_calib_ * T_8toCalib * T_Calib_to_tracker * T_8toCalib_inv;
+        Eigen::Matrix4d T_02tracker_ = T_0to8_calib_ * T_8toCalib * T_Calib_to_tracker;
         Eigen::Matrix4d T_02toolResult_ = T_0to8_calib_ * T_8toCalib * T_Calib_to_tracker * T_tracker2tool;
 	      T_0tolink8Result_ = T_02toolResult_ * T_tool2link7;
 
-	      q_tmp = T_Calib_to_tracker.block<3,3>(0,0);
+	      q_tmp = T_02tracker_.block<3,3>(0,0);
 	      tf::Transform transform;
 	      tf::Quaternion q(q_tmp.x(),q_tmp.y(), q_tmp.z(), q_tmp.w());
 	      transform.setRotation(q);
-	      transform.setOrigin( tf::Vector3(T_Calib_to_tracker(0,3), T_Calib_to_tracker(1,3), T_Calib_to_tracker(2,3)));
-	      tf_broadcaster.sendTransform(tf::StampedTransform(transform, ros::Time::now(), "/calib", "/tracker"));
+	      transform.setOrigin( tf::Vector3(T_02tracker_(0,3), T_02tracker_(1,3), T_02tracker_(2,3)));
+	      tf_broadcaster.sendTransform(tf::StampedTransform(transform, ros::Time::now(), "/panda_link0", "/tracker"));
 
 	      q_tmp = T_02toolResult_.block<3,3>(0,0);
 	      tf::Transform transform1;
@@ -201,10 +205,10 @@ int main(int argc, char **argv)
 	        tracker_offset.block<3,3>(0,0) = R_tmp;
 
 	        Eigen::Matrix3d r_tmp(tracker_offset.block<3,3>(0,0));
+          tracker_offset_inv_ = Eigen::Matrix4d::Identity();
 	        tracker_offset_inv_.block<3,3>(0,0) = r_tmp.transpose();
 	        tracker_offset_inv_.block<3,1>(0,3) = -r_tmp.transpose() * tracker_offset.block<3,1>(0,3);
-	        tracker_offset_inv_.block<1,3>(3,0) = Eigen::Vector3d::Zero();
-	        tracker_offset_inv_(3,3) = 1.0;
+
 
 
 	        tf::TransformListener tf_listener_;
@@ -231,6 +235,7 @@ int main(int argc, char **argv)
 	          }
 	        }
 	        state_ = 0;
+          std::cout<<"CALIBRATED"<<std::endl;
 	        break;
 	      }
 
@@ -248,6 +253,7 @@ int main(int argc, char **argv)
 	        vec_point_.push_back(pose_tmp);
 	        vec_task_type_.push_back(0);
 	        state_ = 0;
+          std::cout<<"POINT SAVED: "<< T_0tolink8Result_(0,3)<<", "<< T_0tolink8Result_(1,3)<<", "<< T_0tolink8Result_(2,3)<<std::endl;
 	        break;
 	      }
 
@@ -272,15 +278,21 @@ int main(int argc, char **argv)
           pose_array_tmp_.poses.clear();
 	        vec_task_type_.push_back(1);
 	        state_ = 0;
+          std::cout<<"TRAJ. SAVED"<<std::endl;
 	        break;
 	      }
 
 	      case 5: // clear
 	      {
 	      	vec_task_type_.clear();
+          vec_point_.clear();
 	        vec_traj_.clear();
           pose_array_tmp_.poses.clear();
+          count_play_task_ = 0;
+          count_play_point_ = 0;
+          count_play_traj_ = 0;
 	        state_ = 0;
+          std::cout<<"CLEAR"<<std::endl;
 	        break;
 	      }
 
@@ -299,6 +311,9 @@ int main(int argc, char **argv)
 		      			q_tmp1.vec() << pose_tmp.orientation.x, pose_tmp.orientation.y, pose_tmp.orientation.z;
 		      			Eigen::Matrix3d R_tmp(q_tmp1);
 		      			T_point_.block<3,3>(0,0) = R_tmp;
+
+                std::cout<<"POINT play: "<< T_point_(0,3)<<", "<< T_point_(1,3)<<", "<< T_point_(2,3)<<std::endl;
+
 		      			bool tf_flag = true;
 		      			tf::TransformListener tf_listener_;
 	        			tf::StampedTransform transform_tmp;
@@ -340,18 +355,34 @@ int main(int argc, char **argv)
                   des_pose.orientation.x = q_tmp.x();
                   des_pose.orientation.y = q_tmp.y();
                   des_pose.orientation.z = q_tmp.z();
+
+                  geometry_msgs::PoseStamped send_pose;
+                  send_pose.pose = des_pose;
+                  send_pose.header.stamp = ros::Time::now();
+                  pub_pos_des.publish(send_pose);
+
                   tf::Transform transform;
                   tf::Quaternion q(des_pose.orientation.x,des_pose.orientation.y, des_pose.orientation.z, des_pose.orientation.w);
                   transform.setRotation(q);
                   transform.setOrigin( tf::Vector3(des_pose.position.x, des_pose.position.y, des_pose.position.z));
                   br_base_2_des.sendTransform(tf::StampedTransform(transform, ros::Time::now(), "/panda_link0", "/des_pose_link8"));
-    						}
+    						
+                  Eigen::Quaterniond q_tmp4;
+                  q_tmp4 = T_point_.block<3,3>(0,0);
+                  tf::Transform transform2;
+                  tf::Quaternion q2(q_tmp4.x(),q_tmp4.y(), q_tmp4.z(), q_tmp4.w());
+                  transform2.setRotation(q2);
+                  transform2.setOrigin( tf::Vector3(T_point_(0,3), T_point_(1,3), T_point_(2,3)));
+                  tf_broadcaster.sendTransform(tf::StampedTransform(transform2, ros::Time::now(), "/panda_link0", "/point"));
+
+                }
     						else
     						{
     							step_play = 0;
     							count_play_task_++;
                   count_play_point_++;
     							fist_time = true;
+                  getchar();
     						}
 
 		      		}
@@ -379,6 +410,12 @@ int main(int argc, char **argv)
                 des_pose.orientation.x = q_tmp.x();
                 des_pose.orientation.y = q_tmp.y();
                 des_pose.orientation.z = q_tmp.z();
+
+                geometry_msgs::PoseStamped send_pose;
+                send_pose.pose = des_pose;
+                send_pose.header.stamp = ros::Time::now();
+                pub_pos_des.publish(send_pose);
+
                 tf::Transform transform;
                 tf::Quaternion q(des_pose.orientation.x,des_pose.orientation.y, des_pose.orientation.z, des_pose.orientation.w);
                 transform.setRotation(q);
@@ -399,10 +436,89 @@ int main(int argc, char **argv)
             count_play_task_ = 0;
             count_play_point_ = 0;
             count_play_traj_ = 0;
-            state_ = 0;
+            state_ = 7;
+            std::cout<<"HOMING"<<std::endl;
+
 	      	}
 	        break;
 	      }
+
+        case 7: // homing
+        {
+          if(fist_time)
+          {
+
+            T_point_.block<3,1>(0,3) << 0.379, -0.006, 0.581;
+            Eigen::Quaterniond q_tmp1;
+            q_tmp1.w() = -0.328;
+            q_tmp1.vec() << 0.379, -0.006, 0.581;
+            Eigen::Matrix3d R_tmp(q_tmp1);
+            T_point_.block<3,3>(0,0) = R_tmp;
+            bool tf_flag = true;
+            tf::TransformListener tf_listener_;
+            tf::StampedTransform transform_tmp;
+            while(tf_flag)
+            {
+              try{
+                  tf_listener_.lookupTransform("/panda_link0", "/panda_link8", ros::Time(0), transform_tmp);
+                  T_0to8_ = Eigen::Matrix4d::Identity();
+                  T_0to8_.block<3,1>(0,3) << transform_tmp.getOrigin().x(), transform_tmp.getOrigin().y(), transform_tmp.getOrigin().z();
+                  Eigen::Quaterniond q_tmp;
+                  q_tmp.w() = transform_tmp.getRotation().w();
+                  q_tmp.vec() << transform_tmp.getRotation().x(), transform_tmp.getRotation().y(), transform_tmp.getRotation().z();
+                  Eigen::Matrix3d R_tmp(q_tmp);
+                  T_0to8_.block<3,3>(0,0) = R_tmp;
+                  // std::cout << transform_tmp.getOrigin().x() << " " << transform_tmp.getOrigin().y() << " " << transform_tmp.getOrigin().z() << std::endl;
+                  tf_flag = false;
+                }
+                catch (tf::TransformException ex){
+                    ROS_ERROR("%s",ex.what());
+                    ros::Duration(1.0).sleep();
+                }
+            }
+            fist_time = false;
+          }
+          else
+          {
+            if(step_play <= (time_to_point/dt))
+            {
+              double t = dt * step_play;
+              Eigen::Matrix4d result = pose_interp(t, 0.0, time_to_point, T_0to8_, T_point_);
+              step_play++;
+              // publish pose des result
+              geometry_msgs::Pose des_pose;
+              des_pose.position.x = result(0,3);
+              des_pose.position.y = result(1,3);
+              des_pose.position.z = result(2,3);
+              Eigen::Quaterniond q_tmp(result.block<3,3>(0,0));
+              des_pose.orientation.w = q_tmp.w();
+              des_pose.orientation.x = q_tmp.x();
+              des_pose.orientation.y = q_tmp.y();
+              des_pose.orientation.z = q_tmp.z();
+
+              geometry_msgs::PoseStamped send_pose;
+              send_pose.pose = des_pose;
+              send_pose.header.stamp = ros::Time::now();
+              pub_pos_des.publish(send_pose);
+
+              tf::Transform transform;
+              tf::Quaternion q(des_pose.orientation.x,des_pose.orientation.y, des_pose.orientation.z, des_pose.orientation.w);
+              transform.setRotation(q);
+              transform.setOrigin( tf::Vector3(des_pose.position.x, des_pose.position.y, des_pose.position.z));
+              br_base_2_des.sendTransform(tf::StampedTransform(transform, ros::Time::now(), "/panda_link0", "/des_pose_link8"));
+            }
+            else
+            {
+              step_play = 0;
+              fist_time = true;
+              state_ = 0;
+              std::cout<<"END TASK"<<std::endl;
+            }
+
+          }
+          
+          break;
+        }
 	    }
 		
 		ros::spinOnce();
