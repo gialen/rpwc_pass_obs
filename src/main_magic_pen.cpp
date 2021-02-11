@@ -130,7 +130,7 @@ int main(int argc, char **argv)
   T_tracker2tool.block<3,1>(0,3) << 0.0,0.0,-0.123;
 
   Eigen::Matrix4d T_tool2link7(Eigen::Matrix4d::Identity());
-  T_tool2link7.block<3,1>(0,3) << 0.0,0.0,-0.138;
+  T_tool2link7.block<3,1>(0,3) << 0.0,0.0,-0.133;
 
   Eigen::Matrix3d r_tmp(T_8toCalib.block<3,3>(0,0));
   T_8toCalib_inv.block<3,3>(0,0) = r_tmp.transpose();
@@ -292,6 +292,7 @@ int main(int argc, char **argv)
           count_play_point_ = 0;
           count_play_traj_ = 0;
 	        state_ = 0;
+          step_play = 0;
           std::cout<<"CLEAR"<<std::endl;
 	        break;
 	      }
@@ -450,8 +451,8 @@ int main(int argc, char **argv)
 
             T_point_.block<3,1>(0,3) << 0.379, -0.006, 0.581;
             Eigen::Quaterniond q_tmp1;
-            q_tmp1.w() = -0.328;
-            q_tmp1.vec() << 0.379, -0.006, 0.581;
+            q_tmp1.w() = -0.240;
+            q_tmp1.vec() << 0.756, -0.354, 0.495;
             Eigen::Matrix3d R_tmp(q_tmp1);
             T_point_.block<3,3>(0,0) = R_tmp;
             bool tf_flag = true;
