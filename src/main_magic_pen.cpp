@@ -87,6 +87,119 @@ Eigen::Matrix4d pose_interp(double t, double t1, double t2, Eigen::Matrix4d cons
   return result;
 }
 
+Eigen::Matrix3d skew(Eigen::Vector3d V)
+{
+  Eigen::Matrix3d result;
+  result <<  0,    -V(2),    V(1),
+        V(2),      0,    -V(0),
+       -V(1),    V(0),      0;
+  return result;
+}
+
+Eigen::Quaterniond rot2quat(Eigen::Matrix4d R)
+{
+  Eigen::Quaterniond result;
+  result.w() = 2 * sqrt(1 + R.block<3,3>(0,0).trace());
+  result.vec() << ( R(2,1) - R(1,2) ) / result.w(), ( R(0,2) - R(2,0) ) / result.w(), ( R(1,0) - R(0,1) ) / result.w();
+  return result;
+}
+
+
+Eigen::Matrix4d quat2rot(Eigen::Vector3d q)
+{
+  Eigen::Matrix4d result(Eigen::Matrix4d::Identity());
+  double p = q.transpose() * q;
+  double w = sqrt(1 - p);
+  result.block<3,3>(0,0) = 2*q*q.transpose() + 2*w*skew(q) + Eigen::Matrix3d::Identity() - (2*Eigen::Matrix3d::Identity()*p);
+
+  return result;
+}
+
+
+Eigen::Matrix4d handEye(std::vector<Eigen::Matrix4d> bHg, std::vector<Eigen::Matrix4d> wHc)
+{
+  int M = bHg.size();
+  int K = (M*M-M)/2; //Number of unique camera position pairs
+
+  Eigen::MatrixXd A, B, Pcg_, Pcg, Tcg;
+  A = Eigen::MatrixXd::Zero(3*K,3); //will store: skew(Pgij+Pcij)
+  B = Eigen::MatrixXd::Zero(3*K,1); //will store: Pcij - Pgij
+  Pcg_ = Eigen::MatrixXd::Zero(3,1); //will store: Pcij - Pgij
+  Pcg = Eigen::MatrixXd::Zero(3,1); 
+  Tcg = Eigen::MatrixXd::Zero(3,1);
+  int k = 0;
+
+  // Now convert from wHc notation to Hc notation used in Tsai paper.
+  std::vector<Eigen::Matrix4d> Hg = bHg;
+  //% Hc = cHw = inv(wHc); We do it in a loop because wHc is given, not cHw
+  // std::vector<Eigen::Matrix4d> Hc = zeros(4,4,M);
+  std::vector<Eigen::Matrix4d> Hc;
+  for(int i = 0; i < M; i++)
+  {
+    Hc.push_back(wHc[i].inverse());
+
+  }
+
+
+
+  for(int i = 0; i < M; i++)
+  {
+    for(int j = i + 1; j < M; j++)
+    {
+      Eigen::Matrix4d Hgij = Hg[j].inverse() * Hg[i]; //Transformation from i-th to j-th gripper pose      
+      Eigen::Quaterniond Pgij = rot2quat(Hgij); // ... and the corresponding quaternion
+      Pgij.w() = Pgij.w() * 2;
+      Pgij.vec() = Pgij.vec() * 2;
+
+
+
+      Eigen::Matrix4d Hcij = Hc[j] * Hc[i].inverse(); //Transformation from i-th to j-th camera pose
+      Eigen::Quaterniond Pcij = rot2quat(Hcij); // ... and the corresponding quaternion
+      Pcij.w() = Pcij.w() * 2;
+      Pcij.vec() = Pcij.vec() * 2;
+
+      // k = k+1;
+      A.block<3,3>(k*3,0) = skew(Pgij.vec()+Pcij.vec()); // left-hand side
+      B.block<3,1>(k*3,0) = Pcij.vec() - Pgij.vec(); // right-hand side
+      k = k+1;
+
+    }
+  }
+  
+  Pcg_ = A.colPivHouseholderQr().solve(B);                //Solve the equation A*Pcg_ = B
+
+
+  Eigen::MatrixXd tmp = Pcg_.transpose()*Pcg_;
+  Pcg = 2 * Pcg_ / sqrt(1 + tmp(0,0));
+
+  Eigen::Matrix4d Rcg = quat2rot(Pcg/2);         //Rotation matrix
+
+  // Calculate translational component
+  k = 0;
+  for(int i = 0; i < M; i++)
+  {
+    for(int j = i + 1; j < M; j++)
+    {
+      Eigen::Matrix4d Hgij = Hg[j].inverse() * Hg[i]; //Transformation from i-th to j-th gripper pose
+      Eigen::Matrix4d Hcij = Hc[j] * Hc[i].inverse(); //Transformation from i-th to j-th camera pose
+
+      A.block<3,3>(k*3,0) = Hgij.block<3,3>(0,0) - Eigen::Matrix3d::Identity(); // left-hand side
+      B.block<3,1>(k*3,0) = Rcg.block<3,3>(0,0) * Hcij.block<3,1>(0,3) - Hgij.block<3,1>(0,3); // right-hand side
+      k = k+1;
+    }
+  }
+
+  Tcg = A.colPivHouseholderQr().solve(B);                //Solve the equation A*Pcg_ = B
+
+
+  Eigen::Matrix4d result(Eigen::Matrix4d::Identity());
+  result.block<3,3>(0,0) = Rcg.block<3,3>(0,0);
+  result.block<3,1>(0,3) = Tcg;
+
+  return result;
+
+}
+
 //-----------------------------------------------------
 //                                                 main
 //-----------------------------------------------------
@@ -140,6 +253,47 @@ int main(int argc, char **argv)
 
   tf::TransformBroadcaster tf_broadcaster;
   tf::TransformBroadcaster br_base_2_des;
+
+  std::vector<Eigen::Matrix4d> test_a, test_b;
+  Eigen::Matrix4d tmp;
+   tmp<<  0.0000,   -1.0000,         0,         0,
+        1.0000,    0.0000,         0,         0,
+             0 ,        0 ,   1.0000 ,        0,
+             0 ,        0  ,       0  ,  1.0000;
+  test_a.push_back(tmp);
+  tmp <<   1.0000 ,        0 ,       0  ,       0,
+         0  ,  0.0000 ,  -1.0000 ,        0,
+         0 ,   1.0000 ,   0.0000 ,        0,
+         0  ,       0 ,        0 ,   1.0000;
+  test_a.push_back(tmp);
+  tmp <<     0.0000 ,        0,    1.0000 ,        0,
+         0,    1.0000,         0 ,        0,
+   -1.0000,         0,    0.0000,         0,
+         0,         0,         0,    1.0000;
+  test_a.push_back(tmp);
+
+
+
+
+
+   tmp<<  0.0000 ,  -1.0000,         0,         0,
+    1.0000,    0.0000,         0,         0,
+         0,         0 ,   1.0000 ,        0,
+         0,        0 ,        0 ,   1.0000;
+  test_b.push_back(tmp);
+  tmp <<    0.0000,         0,   -1.0000,   -1.0000,
+         0,    1.0000,         0,         0,
+    1.0000,         0,    0.0000,   -1.0000,
+         0,        0,         0,    1.0000;
+  test_b.push_back(tmp);
+  tmp <<    1.0000,         0,         0,         0,
+         0 ,   0.0000 ,  -1.0000,   -1.0000,
+         0,    1.0000 ,   0.0000,   -1.0000,
+         0  ,       0 ,        0 ,   1.0000;
+  test_b.push_back(tmp);
+
+Eigen::Matrix4d result =  handEye(test_a, test_b);
+std::cout<< "resutl: "<< result<< std::endl;
 
 	
 	while(ros::ok())
