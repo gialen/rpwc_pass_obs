@@ -26,6 +26,8 @@ int state_ = 0;
 int count_play_task_ = 0;
 int count_play_point_ = 0;
 int count_play_traj_ = 0;
+std::vector<Eigen::Matrix4d> AA; // robot pose
+std::vector<Eigen::Matrix4d> BB; // tracker pose
 
 
 void callback_tracker(const geometry_msgs::PoseWithCovarianceStamped::ConstPtr& msg)
@@ -38,6 +40,22 @@ bool callback_calibration(std_srvs::Empty::Request  &req, std_srvs::Empty::Respo
   state_ = 1;
   return true;
 }
+
+
+bool callback_take_pose(std_srvs::Empty::Request  &req, std_srvs::Empty::Response &res)
+{
+  Eigen::Matrix4d tracker_tmp(Eigen::Matrix4d::Identity());
+  tracker_tmp.block<3,1>(0,3) << pose_tracker_.position.x, pose_tracker_.position.y, pose_tracker_.position.z;
+  Eigen::Quaterniond q_tmp;
+  q_tmp.w() = pose_tracker_.orientation.w;
+  q_tmp.vec() << pose_tracker_.orientation.x, pose_tracker_.orientation.y, pose_tracker_.orientation.z;
+  Eigen::Matrix3d R_tmp(q_tmp);
+  tracker_tmp.block<3,3>(0,0) = R_tmp;
+  BB.push_back(tracker_tmp);
+  // state_ = 1;
+  return true;
+}
+
 
 bool callback_save_point(std_srvs::Empty::Request  &req, std_srvs::Empty::Response &res)
 {
@@ -221,6 +239,7 @@ int main(int argc, char **argv)
 
  //  //Service Server
   ros::ServiceServer server_calibration = nh.advertiseService("/calibrate", &callback_calibration);
+  ros::ServiceServer server_take_pose = nh.advertiseService("/take_pose", &callback_take_pose);
   ros::ServiceServer server_save_point = nh.advertiseService("/save_point", &callback_save_point);
   ros::ServiceServer server_start_traj = nh.advertiseService("/start_traj", &callback_start_traj);
   ros::ServiceServer server_end_traj = nh.advertiseService("/end_traj", &callback_end_traj);
@@ -254,46 +273,46 @@ int main(int argc, char **argv)
   tf::TransformBroadcaster tf_broadcaster;
   tf::TransformBroadcaster br_base_2_des;
 
-  std::vector<Eigen::Matrix4d> test_a, test_b;
-  Eigen::Matrix4d tmp;
-   tmp<<  0.0000,   -1.0000,         0,         0,
-        1.0000,    0.0000,         0,         0,
-             0 ,        0 ,   1.0000 ,        0,
-             0 ,        0  ,       0  ,  1.0000;
-  test_a.push_back(tmp);
-  tmp <<   1.0000 ,        0 ,       0  ,       0,
-         0  ,  0.0000 ,  -1.0000 ,        0,
-         0 ,   1.0000 ,   0.0000 ,        0,
-         0  ,       0 ,        0 ,   1.0000;
-  test_a.push_back(tmp);
-  tmp <<     0.0000 ,        0,    1.0000 ,        0,
-         0,    1.0000,         0 ,        0,
-   -1.0000,         0,    0.0000,         0,
-         0,         0,         0,    1.0000;
-  test_a.push_back(tmp);
+//   std::vector<Eigen::Matrix4d> test_a, test_b;
+//   Eigen::Matrix4d tmp;
+//    tmp<<  0.0000,   -1.0000,         0,         0,
+//         1.0000,    0.0000,         0,         0,
+//              0 ,        0 ,   1.0000 ,        0,
+//              0 ,        0  ,       0  ,  1.0000;
+//   test_a.push_back(tmp);
+//   tmp <<   1.0000 ,        0 ,       0  ,       0,
+//          0  ,  0.0000 ,  -1.0000 ,        0,
+//          0 ,   1.0000 ,   0.0000 ,        0,
+//          0  ,       0 ,        0 ,   1.0000;
+//   test_a.push_back(tmp);
+//   tmp <<     0.0000 ,        0,    1.0000 ,        0,
+//          0,    1.0000,         0 ,        0,
+//    -1.0000,         0,    0.0000,         0,
+//          0,         0,         0,    1.0000;
+//   test_a.push_back(tmp);
 
 
 
 
 
-   tmp<<  0.0000 ,  -1.0000,         0,         0,
-    1.0000,    0.0000,         0,         0,
-         0,         0 ,   1.0000 ,        0,
-         0,        0 ,        0 ,   1.0000;
-  test_b.push_back(tmp);
-  tmp <<    0.0000,         0,   -1.0000,   -1.0000,
-         0,    1.0000,         0,         0,
-    1.0000,         0,    0.0000,   -1.0000,
-         0,        0,         0,    1.0000;
-  test_b.push_back(tmp);
-  tmp <<    1.0000,         0,         0,         0,
-         0 ,   0.0000 ,  -1.0000,   -1.0000,
-         0,    1.0000 ,   0.0000,   -1.0000,
-         0  ,       0 ,        0 ,   1.0000;
-  test_b.push_back(tmp);
+//    tmp<<  0.0000 ,  -1.0000,         0,         0,
+//     1.0000,    0.0000,         0,         0,
+//          0,         0 ,   1.0000 ,        0,
+//          0,        0 ,        0 ,   1.0000;
+//   test_b.push_back(tmp);
+//   tmp <<    0.0000,         0,   -1.0000,   -1.0000,
+//          0,    1.0000,         0,         0,
+//     1.0000,         0,    0.0000,   -1.0000,
+//          0,        0,         0,    1.0000;
+//   test_b.push_back(tmp);
+//   tmp <<    1.0000,         0,         0,         0,
+//          0 ,   0.0000 ,  -1.0000,   -1.0000,
+//          0,    1.0000 ,   0.0000,   -1.0000,
+//          0  ,       0 ,        0 ,   1.0000;
+//   test_b.push_back(tmp);
 
-Eigen::Matrix4d result =  handEye(test_a, test_b);
-std::cout<< "resutl: "<< result<< std::endl;
+// Eigen::Matrix4d result =  handEye(test_a, test_b);
+// std::cout<< "resutl: "<< result<< std::endl;
 
 	
 	while(ros::ok())
