@@ -28,6 +28,8 @@ int count_play_point_ = 0;
 int count_play_traj_ = 0;
 std::vector<Eigen::Matrix4d> AA; // robot pose
 std::vector<Eigen::Matrix4d> BB; // tracker pose
+bool first_take_pose_ = true;
+Eigen::Matrix4d tracker_offset_inv_calib_(Eigen::Matrix4d::Identity());
 
 
 void callback_tracker(const geometry_msgs::PoseWithCovarianceStamped::ConstPtr& msg)
@@ -44,6 +46,9 @@ bool callback_calibration(std_srvs::Empty::Request  &req, std_srvs::Empty::Respo
 
 bool callback_take_pose(std_srvs::Empty::Request  &req, std_srvs::Empty::Response &res)
 {
+  
+
+
   Eigen::Matrix4d tracker_tmp(Eigen::Matrix4d::Identity());
   tracker_tmp.block<3,1>(0,3) << pose_tracker_.position.x, pose_tracker_.position.y, pose_tracker_.position.z;
   Eigen::Quaterniond q_tmp;
@@ -51,7 +56,42 @@ bool callback_take_pose(std_srvs::Empty::Request  &req, std_srvs::Empty::Respons
   q_tmp.vec() << pose_tracker_.orientation.x, pose_tracker_.orientation.y, pose_tracker_.orientation.z;
   Eigen::Matrix3d R_tmp(q_tmp);
   tracker_tmp.block<3,3>(0,0) = R_tmp;
+
+  if(first_take_pose_)
+  {
+    first_take_pose_ = false;
+    Eigen::Matrix3d r_tmp(tracker_tmp.block<3,3>(0,0));
+    tracker_offset_inv_calib_ = Eigen::Matrix4d::Identity();
+    tracker_offset_inv_calib_.block<3,3>(0,0) = r_tmp.transpose();
+    tracker_offset_inv_calib_.block<3,1>(0,3) = -r_tmp.transpose() * tracker_tmp.block<3,1>(0,3);
+  }
+  tracker_tmp = tracker_offset_inv_calib_ * tracker_tmp;
+
   BB.push_back(tracker_tmp);
+
+  Eigen::Matrix4d link8_tmp(Eigen::Matrix4d::Identity());
+  tf::TransformListener tf_listener;
+  tf::StampedTransform transform_tmp;
+  bool tf_flag = true;
+  while(tf_flag)
+  {
+    try{
+        tf_listener.lookupTransform("/panda_link0", "/panda_link8", ros::Time(0), transform_tmp);
+        link8_tmp.block<3,1>(0,3) << transform_tmp.getOrigin().x(), transform_tmp.getOrigin().y(), transform_tmp.getOrigin().z();
+        Eigen::Quaterniond q_tmp;
+        q_tmp.w() = transform_tmp.getRotation().w();
+        q_tmp.vec() << transform_tmp.getRotation().x(), transform_tmp.getRotation().y(), transform_tmp.getRotation().z();
+        Eigen::Matrix3d R_tmp(q_tmp);
+        link8_tmp.block<3,3>(0,0) = R_tmp;
+        // std::cout << transform_tmp.getOrigin().x() << " " << transform_tmp.getOrigin().y() << " " << transform_tmp.getOrigin().z() << std::endl;
+        tf_flag = false;
+    }
+    catch (tf::TransformException ex){
+        ROS_ERROR("%s",ex.what());
+        ros::Duration(1.0).sleep();
+    }
+  }
+  AA.push_back(link8_tmp);
   // state_ = 1;
   return true;
 }
@@ -250,10 +290,10 @@ int main(int argc, char **argv)
   T_point_ = Eigen::Matrix4d::Identity();
   Eigen::Matrix4d T_8toCalib(Eigen::Matrix4d::Identity());
   Eigen::Matrix4d T_8toCalib_inv(Eigen::Matrix4d::Identity());
-  T_8toCalib.block<3,3>(0,0) << -0.707107, 0.0, 0.707107,
-                                -0.707107, 0.0, -0.707107,
-                                 0.0, -1.0, 0.0;
-  T_8toCalib.block<3,1>(0,3) << 0.0944, -0.0944, 0.009;
+  // T_8toCalib.block<3,3>(0,0) << -0.707107, 0.0, 0.707107,
+  //                               -0.707107, 0.0, -0.707107,
+  //                                0.0, -1.0, 0.0;
+  // T_8toCalib.block<3,1>(0,3) << 0.0944, -0.0944, 0.009;
 
   Eigen::Matrix4d T_tracker2tool(Eigen::Matrix4d::Identity());
   T_tracker2tool.block<3,3>(0,0) <<   -1.0000000,  0.0000000,  0.0000000,
@@ -357,6 +397,13 @@ int main(int argc, char **argv)
         transform2.setOrigin( tf::Vector3(T_0tolink8Result_(0,3), T_0tolink8Result_(1,3), T_0tolink8Result_(2,3)));
         tf_broadcaster.sendTransform(tf::StampedTransform(transform2, ros::Time::now(), "/panda_link0", "/link8Result"));
 
+        q_tmp = T_8toCalib.block<3,3>(0,0);
+        tf::Transform transform3;
+        tf::Quaternion q3(q_tmp.x(),q_tmp.y(), q_tmp.z(), q_tmp.w());
+        transform3.setRotation(q3);
+        transform3.setOrigin( tf::Vector3(T_8toCalib(0,3), T_8toCalib(1,3), T_8toCalib(2,3)));
+        tf_broadcaster.sendTransform(tf::StampedTransform(transform3, ros::Time::now(), "/panda_link8", "/test_calib"));
+
 	    }
 
 	    switch(state_)
@@ -367,6 +414,10 @@ int main(int argc, char **argv)
 	      }
 	      case 1: //calibration
 	      {
+
+          T_8toCalib =  handEye(AA, BB);
+          std::cout<< "T_8toCalib: "<< T_8toCalib<< std::endl;
+
 	        Eigen::Matrix4d tracker_offset;
 
 	        tracker_offset = Eigen::Matrix4d::Identity();
