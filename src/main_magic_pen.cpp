@@ -299,7 +299,7 @@ int main(int argc, char **argv)
   T_tracker2tool.block<3,3>(0,0) <<   -1.0000000,  0.0000000,  0.0000000,
                                        0.0000000,  1.0000000,  0.0000000,
                                       -0.0000000,  0.0000000, -1.0000000;
-  T_tracker2tool.block<3,1>(0,3) << 0.0,0.0,-0.123;
+  T_tracker2tool.block<3,1>(0,3) << 0.0,0.0,-0.103;
 
   Eigen::Matrix4d T_tool2link7(Eigen::Matrix4d::Identity());
   T_tool2link7.block<3,1>(0,3) << 0.0,0.0,-0.133;
@@ -310,7 +310,7 @@ int main(int argc, char **argv)
   T_8toCalib_inv.block<1,3>(3,0) = Eigen::Vector3d::Zero();
   T_8toCalib_inv(3,3) = 1.0;
 
-  tf::TransformBroadcaster tf_broadcaster;
+  tf::TransformBroadcaster tf_broadcaster, tf_broadcaster1;
   tf::TransformBroadcaster br_base_2_des;
 
 //   std::vector<Eigen::Matrix4d> test_a, test_b;
@@ -402,7 +402,7 @@ int main(int argc, char **argv)
         tf::Quaternion q3(q_tmp.x(),q_tmp.y(), q_tmp.z(), q_tmp.w());
         transform3.setRotation(q3);
         transform3.setOrigin( tf::Vector3(T_8toCalib(0,3), T_8toCalib(1,3), T_8toCalib(2,3)));
-        tf_broadcaster.sendTransform(tf::StampedTransform(transform3, ros::Time::now(), "/panda_link8", "/test_calib"));
+        tf_broadcaster1.sendTransform(tf::StampedTransform(transform3, ros::Time::now(), "/panda_link8", "/test_calib"));
 
 	    }
 
