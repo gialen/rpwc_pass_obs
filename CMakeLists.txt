@@ -218,3 +218,7 @@ target_link_libraries(tf_base_tracker_pub_node ${catkin_LIBRARIES})
 add_executable(magic_pen_node src/main_magic_pen.cpp)
 add_dependencies(magic_pen_node ${${PROJECT_NAME}_EXPORTED_TARGETS} ${catkin_EXPORTED_TARGETS})
 target_link_libraries(magic_pen_node ${catkin_LIBRARIES})
+
+add_executable(teleop_tracker_vive_node src/main_teleop_tracker_vive.cpp)
+add_dependencies(teleop_tracker_vive_node ${${PROJECT_NAME}_EXPORTED_TARGETS} ${catkin_EXPORTED_TARGETS})
+target_link_libraries(teleop_tracker_vive_node ${catkin_LIBRARIES})
