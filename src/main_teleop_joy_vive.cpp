@@ -7,6 +7,7 @@
 #include <geometry_msgs/Pose.h>
 #include <geometry_msgs/PoseArray.h>
 #include <geometry_msgs/PoseWithCovarianceStamped.h>
+#include <sensor_msgs/Joy.h>
 #include <std_srvs/Empty.h>
 #include <std_srvs/SetBool.h>
 #include <fstream>
@@ -14,14 +15,19 @@
 #include <tf/transform_listener.h>
 #include <tf/transform_broadcaster.h>
 #include <tf/transform_datatypes.h>
+#include <std_msgs/Float64.h>
+
 
 Eigen::Matrix4d T_base_2_EE_, T_joy_;
 bool flag_T_base_2_EE_ = false;
 bool first_quat_joy_ = true;
 bool first_cmd_ = true;
 bool flag_send_cmd_ = false;
+bool flag_calibration_ = false;
 Eigen::Quaterniond quat_joy_old_;
 int state_ = 0;
+int menu_butt_old_ = 0;
+double gripper_ = 0.0;
 
 
 void callback_curr_pose_EE(const geometry_msgs::Pose::ConstPtr& msg)
@@ -70,6 +76,19 @@ void callback_joy_R_pose(const geometry_msgs::PoseStamped::ConstPtr& msg)
 
 }
 
+void callback_joy_R(const sensor_msgs::Joy::ConstPtr& msg)
+{
+  gripper_ = msg->axes[0];
+  int menu_butt = msg->buttons[3];
+  if((menu_butt == 1) && (menu_butt_old_ == 0))
+  {
+    if(!flag_calibration_) state_ = 1;
+    else flag_send_cmd_ = !flag_send_cmd_;
+  }
+
+   menu_butt_old_ = menu_butt;
+}
+
 bool callback_calibration(std_srvs::Empty::Request  &req, std_srvs::Empty::Response &res)
 {
   state_ = 1;
@@ -100,14 +119,16 @@ int main(int argc, char **argv)
 
   ros::Subscriber sub_robot_pose = nh.subscribe("/setup1/rpwc_robot_curr_pose", 1, callback_curr_pose_EE);
   ros::Subscriber sub_joy_R_pose = nh.subscribe("/right_controller_as_posestamped", 1, &callback_joy_R_pose);
+  ros::Subscriber sub_joy_R = nh.subscribe("/vive_right", 1, &callback_joy_R);
 
   ros::Publisher pub_pos_des = nh.advertise<geometry_msgs::Pose>("/setup1/rpwc_pose_des", 1);
+  ros::Publisher pub_CommandHand = nh.advertise<std_msgs::Float64>("/setup1/rpwc_EE_cmd", 1);
 
 
   ros::ServiceServer server_calibration = nh.advertiseService("/calibrate", &callback_calibration);
   ros::ServiceServer server_teleop_send_cmd = nh.advertiseService("/teleop_send_cmd", &callback_teleop_send_cmd);
 
-  bool flag_calibration = false;
+  
   Eigen::Matrix4d T_joy_calib_inv;
   Eigen::Matrix3d R_baserobot2calibjoy, R_offset_EE;
   R_baserobot2calibjoy = Eigen::Matrix3d::Identity();
@@ -140,15 +161,18 @@ int main(int argc, char **argv)
           T_joy_calib = Eigen::Matrix4d::Identity();
           T_joy_calib = T_joy_;
 
-          Eigen::Matrix3d r_joy_calib(T_joy_calib.block<3,3>(0,0));
+          r_joy_calib = T_joy_calib.block<3,3>(0,0);
           T_joy_calib_inv = Eigen::Matrix4d::Identity();
           T_joy_calib_inv.block<3,3>(0,0) = r_joy_calib.transpose();
           T_joy_calib_inv.block<3,1>(0,3) = -r_joy_calib.transpose() * T_joy_calib.block<3,1>(0,3);
 
+          pos_EE_offset = T_base_2_EE_.block<3,1>(0,3);
+
+
           // T_0toEE_calib_ = Eigen::Matrix4d::Identity();
           // T_0toEE_calib_ = T_base_2_EE_;
 
-          flag_calibration = true;
+          flag_calibration_ = true;
           state_ = 2;
           std::cout<<"CALIBRATED"<<std::endl;
           break;
@@ -156,9 +180,43 @@ int main(int argc, char **argv)
 
         case 2: //teleop
         {
-          if(flag_T_base_2_EE_  && flag_calibration)
+          if(flag_T_base_2_EE_  && flag_calibration_)
           {
-            if(first_cmd_)
+            Eigen::Matrix4d T_joy_calib2curr;
+            T_joy_calib2curr = T_joy_calib_inv * T_joy_;
+            Eigen::Matrix3d R_baserobot2result;
+            R_baserobot2result = R_baserobot2calibjoy * T_joy_calib2curr.block<3,3>(0,0) * R_baserobot2calibjoy.transpose() * R_offset_EE;
+            Eigen::Vector3d V_baserobot2result;
+            V_baserobot2result = pos_EE_offset + (R_baserobot2calibjoy * T_joy_calib2curr.block<3,1>(0,3));
+            // std::cout << "pos_EE_offset: " << pos_EE_offset<<std::endl;
+            // std::cout << "T_joy_calib2curr.block<3,1>(0,3): " << T_joy_calib2curr.block<3,1>(0,3)<<std::endl;
+
+            Eigen::Quaterniond q_tmp(R_baserobot2result);
+            tf::Transform transform;
+            tf::Quaternion q(q_tmp.x(),q_tmp.y(), q_tmp.z(), q_tmp.w());
+            transform.setRotation(q);
+            transform.setOrigin( tf::Vector3(V_baserobot2result(0), V_baserobot2result(1), V_baserobot2result(2)));
+            tf_broadcaster.sendTransform(tf::StampedTransform(transform, ros::Time::now(), "/panda_link0", "/teleop_pose_des"));
+
+            if(flag_send_cmd_)
+            {
+              geometry_msgs::Pose msg_des_pose;
+              msg_des_pose.position.x = V_baserobot2result(0);
+              msg_des_pose.position.y = V_baserobot2result(1);
+              msg_des_pose.position.z = V_baserobot2result(2);
+
+              msg_des_pose.orientation.w = q_tmp.w();
+              msg_des_pose.orientation.x = q_tmp.x();
+              msg_des_pose.orientation.y = q_tmp.y();
+              msg_des_pose.orientation.z = q_tmp.z();
+
+              pub_pos_des.publish(msg_des_pose);
+
+              std_msgs::Float64 msg_EE;
+              msg_EE.data = gripper_;
+              pub_CommandHand.publish(msg_EE);
+            }
+            else
             {
               Eigen::Matrix4d T_joy_calib;
 
@@ -171,49 +229,63 @@ int main(int argc, char **argv)
               //aggiorno solo la parte di posizione nella matrice per la calibrazione 
               T_joy_calib_inv.block<3,1>(0,3) = -r_joy_calib.transpose() * T_joy_calib.block<3,1>(0,3);
 
-
               pos_EE_offset = T_base_2_EE_.block<3,1>(0,3);
-
-              first_cmd_ = false;
             }
-            else
-            {
-              Eigen::Matrix4d T_joy_calib2curr;
-              T_joy_calib2curr = T_joy_calib_inv * T_joy_;
-              Eigen::Matrix3d R_baserobot2result;
-              R_baserobot2result = R_baserobot2calibjoy * T_joy_calib2curr.block<3,3>(0,0) * R_baserobot2calibjoy.transpose() * R_offset_EE;
-              Eigen::Vector3d V_baserobot2result;
-              V_baserobot2result = pos_EE_offset + (R_baserobot2calibjoy * T_joy_calib2curr.block<3,1>(0,3));
+            // if(first_cmd_)
+            // {
+            //   Eigen::Matrix4d T_joy_calib;
 
-              Eigen::Quaterniond q_tmp(R_baserobot2result);
-              tf::Transform transform;
-              tf::Quaternion q(q_tmp.x(),q_tmp.y(), q_tmp.z(), q_tmp.w());
-              transform.setRotation(q);
-              transform.setOrigin( tf::Vector3(V_baserobot2result(0), V_baserobot2result(1), V_baserobot2result(2)));
-              tf_broadcaster.sendTransform(tf::StampedTransform(transform, ros::Time::now(), "/panda_link0", "/teleop_pose_des"));
+            //   T_joy_calib = Eigen::Matrix4d::Identity();
+            //   T_joy_calib = T_joy_;
+
+            //   // Eigen::Matrix3d r_tmp(T_joy_calib.block<3,3>(0,0));
+            //   // T_joy_calib_inv = Eigen::Matrix4d::Identity();
+            //   // T_joy_calib_inv.block<3,3>(0,0) = r_tmp.transpose();
+            //   //aggiorno solo la parte di posizione nella matrice per la calibrazione 
+            //   T_joy_calib_inv.block<3,1>(0,3) = -r_joy_calib.transpose() * T_joy_calib.block<3,1>(0,3);
+
+
+            //   pos_EE_offset = T_base_2_EE_.block<3,1>(0,3);
+
+            //   first_cmd_ = false;
+            // }
+            // else
+            // {
+            //   Eigen::Matrix4d T_joy_calib2curr;
+            //   T_joy_calib2curr = T_joy_calib_inv * T_joy_;
+            //   Eigen::Matrix3d R_baserobot2result;
+            //   R_baserobot2result = R_baserobot2calibjoy * T_joy_calib2curr.block<3,3>(0,0) * R_baserobot2calibjoy.transpose() * R_offset_EE;
+            //   Eigen::Vector3d V_baserobot2result;
+            //   V_baserobot2result = pos_EE_offset + (R_baserobot2calibjoy * T_joy_calib2curr.block<3,1>(0,3));
+            //   // std::cout << "pos_EE_offset: " << pos_EE_offset<<std::endl;
+            //   // std::cout << "T_joy_calib2curr.block<3,1>(0,3): " << T_joy_calib2curr.block<3,1>(0,3)<<std::endl;
+
+            //   Eigen::Quaterniond q_tmp(R_baserobot2result);
+            //   tf::Transform transform;
+            //   tf::Quaternion q(q_tmp.x(),q_tmp.y(), q_tmp.z(), q_tmp.w());
+            //   transform.setRotation(q);
+            //   transform.setOrigin( tf::Vector3(V_baserobot2result(0), V_baserobot2result(1), V_baserobot2result(2)));
+            //   tf_broadcaster.sendTransform(tf::StampedTransform(transform, ros::Time::now(), "/panda_link0", "/teleop_pose_des"));
 
               
 
-              if(flag_send_cmd_)
-              {
-                geometry_msgs::Pose msg_des_pose;
-                msg_des_pose.position.x = V_baserobot2result(0);
-                msg_des_pose.position.y = V_baserobot2result(1);
-                msg_des_pose.position.z = V_baserobot2result(2);
+            //   if(flag_send_cmd_)
+            //   {
+            //     geometry_msgs::Pose msg_des_pose;
+            //     msg_des_pose.position.x = V_baserobot2result(0);
+            //     msg_des_pose.position.y = V_baserobot2result(1);
+            //     msg_des_pose.position.z = V_baserobot2result(2);
 
-                msg_des_pose.orientation.w = q_tmp.w();
-                msg_des_pose.orientation.x = q_tmp.x();
-                msg_des_pose.orientation.y = q_tmp.y();
-                msg_des_pose.orientation.z = q_tmp.z();
+            //     msg_des_pose.orientation.w = q_tmp.w();
+            //     msg_des_pose.orientation.x = q_tmp.x();
+            //     msg_des_pose.orientation.y = q_tmp.y();
+            //     msg_des_pose.orientation.z = q_tmp.z();
 
-                pub_pos_des.publish(msg_des_pose);
-              }
-            }
+            //     pub_pos_des.publish(msg_des_pose);
+            //   }
+            // }
           }
           else std::cout<<"teleop error"<<std::endl;
-
-
-
           break;
         }
 
