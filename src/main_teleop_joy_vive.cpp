@@ -79,7 +79,7 @@ void callback_joy_R_pose(const geometry_msgs::PoseStamped::ConstPtr& msg)
 void callback_joy_R(const sensor_msgs::Joy::ConstPtr& msg)
 {
   gripper_ = msg->axes[0];
-  int menu_butt = msg->buttons[3];
+  int menu_butt = msg->buttons[4];
   if((menu_butt == 1) && (menu_butt_old_ == 0))
   {
     if(!flag_calibration_) state_ = 1;
