@@ -196,7 +196,7 @@ int main(int argc, char **argv)
             tf::Quaternion q(q_tmp.x(),q_tmp.y(), q_tmp.z(), q_tmp.w());
             transform.setRotation(q);
             transform.setOrigin( tf::Vector3(V_baserobot2result(0), V_baserobot2result(1), V_baserobot2result(2)));
-            tf_broadcaster.sendTransform(tf::StampedTransform(transform, ros::Time::now(), "/panda_link0", "/teleop_pose_des"));
+            tf_broadcaster.sendTransform(tf::StampedTransform(transform, ros::Time::now(), "/setup1/panda_link0", "/teleop_pose_des"));
 
             if(flag_send_cmd_)
             {
