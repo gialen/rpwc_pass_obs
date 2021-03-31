@@ -16,6 +16,7 @@
 #include <tf/transform_broadcaster.h>
 #include <tf/transform_datatypes.h>
 #include <std_msgs/Float64.h>
+#include <std_msgs/Float64MultiArray.h>
 
 
 Eigen::Matrix4d T_base_2_EE_, T_joy_;
@@ -28,6 +29,7 @@ Eigen::Quaterniond quat_joy_old_;
 int state_ = 0;
 int menu_butt_old_ = 0;
 double gripper_ = 0.0;
+double k_stiff_ = 400.0;
 
 
 void callback_curr_pose_EE(const geometry_msgs::Pose::ConstPtr& msg)
@@ -105,6 +107,12 @@ bool callback_teleop_send_cmd(std_srvs::SetBool::Request  &req, std_srvs::SetBoo
   else  flag_send_cmd_ = false;
   return true;
 }
+
+void callback_stiffness(const std_msgs::Float64::ConstPtr& msg)
+{
+  k_stiff_ = msg->data;
+
+}
 //-----------------------------------------------------
 //                                                 main
 //-----------------------------------------------------
@@ -116,13 +124,17 @@ int main(int argc, char **argv)
   double rate_100Hz = 100.0;
   double dt = 1.0/rate_100Hz;
 	ros::Rate r_100HZ(rate_100Hz);
+  bool flag_stiffness = true;
 
   ros::Subscriber sub_robot_pose = nh.subscribe("/setup1/rpwc_robot_curr_pose", 1, callback_curr_pose_EE);
   ros::Subscriber sub_joy_R_pose = nh.subscribe("/right_controller_as_posestamped", 1, &callback_joy_R_pose);
   ros::Subscriber sub_joy_R = nh.subscribe("/vive_right", 1, &callback_joy_R);
+  ros::Subscriber sub_stiffness = nh.subscribe("/right_arm/stiffness", 1, &callback_stiffness);  
+
 
   ros::Publisher pub_pos_des = nh.advertise<geometry_msgs::Pose>("/setup1/rpwc_pose_des", 1);
   ros::Publisher pub_CommandHand = nh.advertise<std_msgs::Float64>("/setup1/rpwc_EE_cmd", 1);
+  ros::Publisher pub_stiff_des = nh.advertise<std_msgs::Float64MultiArray>("/setup1/desired_stiffness_matrix", 1);
 
 
   ros::ServiceServer server_calibration = nh.advertiseService("/calibrate", &callback_calibration);
@@ -130,7 +142,7 @@ int main(int argc, char **argv)
 
   
   Eigen::Matrix4d T_joy_calib_inv;
-  Eigen::Matrix3d R_baserobot2calibjoy, R_offset_EE;
+  Eigen::Matrix3d R_baserobot2calibjoy, R_offset_EE, R_x_180;
   R_baserobot2calibjoy = Eigen::Matrix3d::Identity();
   R_baserobot2calibjoy << 0.0,  0.0, -1.0,
                         -1.0,  0.0, -0.0,
@@ -138,6 +150,11 @@ int main(int argc, char **argv)
   R_offset_EE << 1.0,  0.0,  0.0,
                  0.0, -1.0, -0.0,
                  0.0,  0.0, -1.0;
+
+  R_x_180 << 1.0,  0.0,  0.0,
+             0.0, -1.0, -0.0,
+             0.0,  0.0, -1.0;
+
 
   Eigen::Vector3d pos_EE_offset;
   tf::TransformBroadcaster tf_broadcaster;
@@ -185,11 +202,18 @@ int main(int argc, char **argv)
             Eigen::Matrix4d T_joy_calib2curr;
             T_joy_calib2curr = T_joy_calib_inv * T_joy_;
             Eigen::Matrix3d R_baserobot2result;
-            R_baserobot2result = R_baserobot2calibjoy * T_joy_calib2curr.block<3,3>(0,0) * R_baserobot2calibjoy.transpose() * R_offset_EE;
+            R_baserobot2result = R_x_180;
+            // R_baserobot2result = R_baserobot2calibjoy * T_joy_calib2curr.block<3,3>(0,0) * R_baserobot2calibjoy.transpose() * R_offset_EE;
             Eigen::Vector3d V_baserobot2result;
             V_baserobot2result = pos_EE_offset + (R_baserobot2calibjoy * T_joy_calib2curr.block<3,1>(0,3));
             // std::cout << "pos_EE_offset: " << pos_EE_offset<<std::endl;
             // std::cout << "T_joy_calib2curr.block<3,1>(0,3): " << T_joy_calib2curr.block<3,1>(0,3)<<std::endl;
+
+            std_msgs::Float64MultiArray stiff_des;
+            Eigen::MatrixXd kMatrix_stiff(Eigen::MatrixXd::Zero(6,6));
+            kMatrix_stiff.topLeftCorner(3,3) = k_stiff_ * Eigen::MatrixXd::Identity(3,3);
+            kMatrix_stiff.bottomRightCorner(3,3) = k_stiff_ * Eigen::MatrixXd::Identity(3,3) / 20;
+            for(int i = 0; i < 36; i++) stiff_des.data.push_back(kMatrix_stiff(i));
 
             Eigen::Quaterniond q_tmp(R_baserobot2result);
             tf::Transform transform;
@@ -215,6 +239,7 @@ int main(int argc, char **argv)
               std_msgs::Float64 msg_EE;
               msg_EE.data = gripper_;
               pub_CommandHand.publish(msg_EE);
+              if(flag_stiffness)pub_stiff_des.publish(stiff_des);   
             }
             else
             {
