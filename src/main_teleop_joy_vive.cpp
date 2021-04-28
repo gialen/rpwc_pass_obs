@@ -124,7 +124,7 @@ int main(int argc, char **argv)
   double rate_100Hz = 100.0;
   double dt = 1.0/rate_100Hz;
 	ros::Rate r_100HZ(rate_100Hz);
-  bool flag_stiffness = true;
+  bool flag_stiffness = false;
 
   ros::Subscriber sub_robot_pose = nh.subscribe("/setup1/rpwc_robot_curr_pose", 1, callback_curr_pose_EE);
   ros::Subscriber sub_joy_R_pose = nh.subscribe("/right_controller_as_posestamped", 1, &callback_joy_R_pose);
@@ -203,7 +203,8 @@ int main(int argc, char **argv)
             T_joy_calib2curr = T_joy_calib_inv * T_joy_;
             Eigen::Matrix3d R_baserobot2result;
             R_baserobot2result = R_x_180;
-            // R_baserobot2result = R_baserobot2calibjoy * T_joy_calib2curr.block<3,3>(0,0) * R_baserobot2calibjoy.transpose() * R_offset_EE;
+            // per bloccare orientazione commanta rriga sotto
+            R_baserobot2result = R_baserobot2calibjoy * T_joy_calib2curr.block<3,3>(0,0) * R_baserobot2calibjoy.transpose() * R_offset_EE;
             Eigen::Vector3d V_baserobot2result;
             V_baserobot2result = pos_EE_offset + (R_baserobot2calibjoy * T_joy_calib2curr.block<3,1>(0,3));
             // std::cout << "pos_EE_offset: " << pos_EE_offset<<std::endl;
